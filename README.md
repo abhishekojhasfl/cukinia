@@ -224,6 +224,10 @@ cukinia_wifi_txpower wlan0 7
 - `cukinia_gpio_libgpiod -i <in_pins> -l <out_low> -h <out_high> -g <gpiochip>` → validate GPIO via libgpiod
 - `cukinia_gpio_sysfs -i <in_pins> -l <out_low> -h <out_high> -g <gpiochip>` → validate GPIO via legacy sysfs
 - `cukinia_i2c <bus> [device_address] [driver_name]` → check I²C bus or (optional) device and (optionally) that it uses the indicated driver
+- `cukinia_pcie_device <vendor_id> <device_id>` → check a PCIe device is present by its vendor and device id
+- `cukinia_pcie_irq <vendor_id> <device_id> <intx|msi|msix>` → check the interrupt mode enabled on a PCIe device
+- `cukinia_pcie_link_speed <vendor_id> <device_id> <GT/s>` → check the negotiated PCIe link speed (e.g. 2.5, 5, 8, 16, 32, 64)
+- `cukinia_pcie_link_width <vendor_id> <device_id> <lanes>` → check the negotiated PCIe link width (e.g. 1, 2, 4, 8, 16, 32)
 
 **Examples**
 
@@ -233,6 +237,11 @@ cukinia_gpio_sysfs -i "20 34" -h "3 99 55"
 
 as "Remote MCU is visible on I2C2 bus address 3c" \
     cukinia_i2c 1 0x3c
+
+cukinia_pcie_device 0x8086 0x1533
+cukinia_pcie_irq 0x8086 0x1533 msix
+cukinia_pcie_link_speed 0x8086 0x1533 8
+cukinia_pcie_link_width 0x8086 0x1533 4
 ```
 
 ---

@@ -33,6 +33,10 @@ GENERIC_FUNCTS='cmd
 		mount
 		netif_has_ip
 		netif_is_up
+		pcie_device
+		pcie_irq
+		pcie_link_speed
+		pcie_link_width
 		process_with_args
 		process
 		kthread
@@ -1129,6 +1133,147 @@ _cukinia_i2c()
 	_test -L "$link" || return 1
 
 	[ "$(readlink -f "$link")" = "$(readlink -f "$target")" ] && return 0 || return 1
+}
+
+# _cukinia_pcie_find: helper to locate a PCIe device by vendor/device id
+# Prints the sysfs path of the first matching device on success.
+# arg1: the vendor id (lowercase hex, without 0x prefix)
+# arg2: the device id (lowercase hex, without 0x prefix)
+_cukinia_pcie_find()
+{
+	local vendor_id="$1"
+	local device_id="$2"
+	local dev
+
+	for dev in /sys/bus/pci/devices/*; do
+		[ -r "$dev/vendor" ] && [ -r "$dev/device" ] || continue
+		[ "$(cat "$dev/vendor")" = "0x$vendor_id" ] || continue
+		[ "$(cat "$dev/device")" = "0x$device_id" ] || continue
+		echo "$dev"
+		return 0
+	done
+
+	return 1
+}
+
+# _cukinia_pcie_device: Check for a PCIe device by vendor/device id
+# arg1: the vendor id (hex, with or without 0x prefix)
+# arg2: the device id (hex, with or without 0x prefix)
+_cukinia_pcie_device()
+{
+	local vendor_id
+	local device_id
+
+	# normalize to lowercase hex without the 0x prefix
+	vendor_id=$(echo "${1#0x}" | tr 'A-Z' 'a-z')
+	device_id=$(echo "${2#0x}" | tr 'A-Z' 'a-z')
+
+	_cukinia_prepare "Checking PCIe device $vendor_id:$device_id is ${__not:+NOT }present"
+
+	_cukinia_pcie_find "$vendor_id" "$device_id" >/dev/null
+}
+
+# _cukinia_pcie_irq: Check the interrupt mode of a PCIe device
+# arg1: the vendor id (hex, with or without 0x prefix)
+# arg2: the device id (hex, with or without 0x prefix)
+# arg3: the interrupt mode to check: intx, msi or msix
+_cukinia_pcie_irq()
+{
+	local vendor_id
+	local device_id
+	local irq_mode
+	local device
+	local irq
+
+	# normalize to lowercase hex without the 0x prefix
+	vendor_id=$(echo "${1#0x}" | tr 'A-Z' 'a-z')
+	device_id=$(echo "${2#0x}" | tr 'A-Z' 'a-z')
+	irq_mode=$(echo "$3" | tr 'A-Z' 'a-z')
+
+	_cukinia_prepare "Checking PCIe device $vendor_id:$device_id has ${__not:+NOT }$irq_mode enabled"
+
+	device=$(_cukinia_pcie_find "$vendor_id" "$device_id") || return 1
+
+	case "$irq_mode" in
+	msi|msix)
+		# each /msi_irqs/<irq> file contains "msi" or "msix"
+		[ -d "$device/msi_irqs" ] || return 1
+		for irq in "$device"/msi_irqs/*; do
+			[ -r "$irq" ] || continue
+			[ "$(cat "$irq")" = "$irq_mode" ] && return 0
+		done
+		return 1
+		;;
+	intx)
+		# INTx is in use when no MSI/MSI-X vector is allocated
+		# but a legacy interrupt line is assigned
+		if [ -d "$device/msi_irqs" ] && \
+			[ -n "$(ls -A "$device/msi_irqs" 2>/dev/null)" ]; then
+			return 1
+		fi
+		[ -r "$device/irq" ] && [ "$(cat "$device/irq")" != "0" ]
+		;;
+	*)
+		_cukinia_prepare "cukinia_pcie_irq: invalid interrupt mode (use intx|msi|msix)"
+		return 1
+		;;
+	esac
+}
+
+# _cukinia_pcie_link_speed: Check the negotiated link speed of a PCIe device
+# arg1: the vendor id (hex, with or without 0x prefix)
+# arg2: the device id (hex, with or without 0x prefix)
+# arg3: the expected link speed in GT/s (2.5, 5, 8, 16, 32 or 64)
+_cukinia_pcie_link_speed()
+{
+	local vendor_id
+	local device_id
+	local expected="$3"
+	local device
+	local actual
+
+	# normalize to lowercase hex without the 0x prefix
+	vendor_id=$(echo "${1#0x}" | tr 'A-Z' 'a-z')
+	device_id=$(echo "${2#0x}" | tr 'A-Z' 'a-z')
+
+	_cukinia_prepare "Checking PCIe device $vendor_id:$device_id link speed is ${__not:+NOT }$expected GT/s"
+
+	device=$(_cukinia_pcie_find "$vendor_id" "$device_id") || return 1
+
+	[ -r "$device/current_link_speed" ] || return 1
+
+	# sysfs reports e.g. "8.0 GT/s PCIe"; keep the numeric GT/s field
+	actual=$(awk '{print $1}' "$device/current_link_speed")
+
+	# compare numerically so 5 and 5.0 match
+	awk -v a="$actual" -v e="$expected" 'BEGIN { exit !(a + 0 == e + 0) }'
+}
+
+# _cukinia_pcie_link_width: Check the negotiated link width of a PCIe device
+# arg1: the vendor id (hex, with or without 0x prefix)
+# arg2: the device id (hex, with or without 0x prefix)
+# arg3: the expected number of lanes in decimal (1, 2, 4, 8, 16 or 32)
+_cukinia_pcie_link_width()
+{
+	local vendor_id
+	local device_id
+	local expected="$3"
+	local device
+	local actual
+
+	# normalize to lowercase hex without the 0x prefix
+	vendor_id=$(echo "${1#0x}" | tr 'A-Z' 'a-z')
+	device_id=$(echo "${2#0x}" | tr 'A-Z' 'a-z')
+
+	_cukinia_prepare "Checking PCIe device $vendor_id:$device_id link width is ${__not:+NOT }$expected lane(s)"
+
+	device=$(_cukinia_pcie_find "$vendor_id" "$device_id") || return 1
+
+	[ -r "$device/current_link_width" ] || return 1
+
+	actual=$(cat "$device/current_link_width")
+
+	[ "$actual" = "$expected" ]
 }
 
 # _cukinia_gpio_libgpiod: Check gpio configuration via libgpiod
